@@ -49,6 +49,8 @@ public class SubtitleController : BaseJellyfinApiController
     private readonly IFileSystem _fileSystem;
     private readonly ILogger<SubtitleController> _logger;
 
+    internal const long DefaultVttTimestampMapMpegts = 900000;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="SubtitleController"/> class.
     /// </summary>
@@ -416,8 +418,6 @@ public class SubtitleController : BaseJellyfinApiController
         builder.AppendLine("#EXT-X-ENDLIST");
         return File(Encoding.UTF8.GetBytes(builder.ToString()), MimeTypes.GetMimeType("playlist.m3u8"));
     }
-
-    internal const long DefaultVttTimestampMapMpegts = 900000;
 
     internal static string GetVttTimestampMap(long mpegTimestamp)
     {
