@@ -20,6 +20,7 @@ using Jellyfin.Extensions;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Extensions;
 using MediaBrowser.Controller.IO;
+using MediaBrowser.Controller.Streaming;
 using MediaBrowser.Model.Configuration;
 using MediaBrowser.Model.Dlna;
 using MediaBrowser.Model.Dto;
@@ -7171,10 +7172,17 @@ namespace MediaBrowser.Controller.MediaEncoding
                 && state.VideoStream is not null
                 && !IsCopyCodec(state.OutputVideoCodec)
                 && options.HlsAudioSeekStrategy is HlsAudioSeekStrategy.TranscodeAudio;
+            var preventHlsFmp4Ac3AudioCopy = ShouldTranscodeHlsFmp4Ac3Audio(state);
+
+            if (preventHlsFmp4Ac3AudioCopy)
+            {
+                state.OutputAudioCodec = GetPreferredHlsFmp4AudioTranscodeCodec(state);
+            }
 
             if (state.AudioStream is not null
                 && CanStreamCopyAudio(state, state.AudioStream, state.SupportedAudioCodecs)
-                && !preventHlsAudioCopy)
+                && !preventHlsAudioCopy
+                && !preventHlsFmp4Ac3AudioCopy)
             {
                 state.OutputAudioCodec = "copy";
             }
@@ -7188,6 +7196,32 @@ namespace MediaBrowser.Controller.MediaEncoding
                     state.OutputAudioCodec = "copy";
                 }
             }
+        }
+
+        private static bool ShouldTranscodeHlsFmp4Ac3Audio(EncodingJobInfo state)
+        {
+            return state.TranscodingType is TranscodingJobType.Hls
+                && state.BaseRequest is StreamingRequestDto streamingRequest
+                && string.Equals(streamingRequest.SegmentContainer, "mp4", StringComparison.OrdinalIgnoreCase)
+                && state.VideoStream is not null
+                && state.AudioStream is not null
+                && (string.Equals(state.AudioStream.Codec, "ac3", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(state.AudioStream.Codec, "eac3", StringComparison.OrdinalIgnoreCase));
+        }
+
+        private string GetPreferredHlsFmp4AudioTranscodeCodec(EncodingJobInfo state)
+        {
+            if (_mediaEncoder.CanEncodeToAudioCodec("aac"))
+            {
+                return "aac";
+            }
+
+            return state.SupportedAudioCodecs
+                       .Where(i => !string.Equals(i, "ac3", StringComparison.OrdinalIgnoreCase)
+                                   && !string.Equals(i, "eac3", StringComparison.OrdinalIgnoreCase)
+                                   && !LosslessAudioCodecs.Contains(i, StringComparison.OrdinalIgnoreCase))
+                       .FirstOrDefault(_mediaEncoder.CanEncodeToAudioCodec)
+                   ?? state.OutputAudioCodec;
         }
 
         private string GetFfmpegAnalyzeDurationArg(EncodingJobInfo state)
