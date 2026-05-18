@@ -156,19 +156,21 @@ public class SessionController : BaseJellyfinApiController
     /// <param name="sessionId">The session id.</param>
     /// <param name="command">The <see cref="PlaystateCommand"/>.</param>
     /// <param name="seekPositionTicks">The optional position ticks.</param>
+    /// <param name="seekOffsetTicks">The optional relative seek offset ticks.</param>
     /// <param name="controllingUserId">The optional controlling user id.</param>
-    /// <response code="204">Playstate command sent to session.</response>
-    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    /// <response code="200">Playstate command sent to session.</response>
+    /// <returns>Updated session info.</returns>
     [HttpPost("Sessions/{sessionId}/Playing/{command}")]
     [Authorize]
-    [ProducesResponseType(StatusCodes.Status204NoContent)]
-    public async Task<ActionResult> SendPlaystateCommand(
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<SessionInfoDto>> SendPlaystateCommand(
         [FromRoute, Required] string sessionId,
         [FromRoute, Required] PlaystateCommand command,
         [FromQuery] long? seekPositionTicks,
+        [FromQuery] long? seekOffsetTicks,
         [FromQuery] string? controllingUserId)
     {
-        await _sessionManager.SendPlaystateCommand(
+        var session = await _sessionManager.SendPlaystateCommand(
             await RequestHelpers.GetSessionId(_sessionManager, _userManager, HttpContext).ConfigureAwait(false),
             sessionId,
             new PlaystateRequest()
@@ -176,11 +178,12 @@ public class SessionController : BaseJellyfinApiController
                 Command = command,
                 ControllingUserId = controllingUserId,
                 SeekPositionTicks = seekPositionTicks,
+                SeekOffsetTicks = seekOffsetTicks,
             },
             CancellationToken.None)
             .ConfigureAwait(false);
 
-        return NoContent();
+        return Ok(session);
     }
 
     /// <summary>

@@ -440,6 +440,8 @@ namespace Emby.Server.Implementations.Session
                 session.LastPausedDate = null;
             }
 
+            info.PositionTicks = GetReportedPositionTicks(session, info.PositionTicks, info.IsPaused);
+
             session.PlayState.IsPaused = info.IsPaused;
             session.PlayState.PositionTicks = info.PositionTicks;
             session.PlayState.MediaSourceId = info.MediaSourceId;
@@ -465,6 +467,37 @@ namespace Emby.Server.Implementations.Session
                     _libraryManager.GetItemList(new InternalItemsQuery { ItemIds = itemIds }),
                     new DtoOptions(true));
             }
+        }
+
+        private static long? GetReportedPositionTicks(SessionInfo session, long? reportedPositionTicks, bool isPaused)
+        {
+            if (!reportedPositionTicks.HasValue || !session.LastRemoteSeekPositionTicks.HasValue || !session.LastRemoteSeekDate.HasValue)
+            {
+                return reportedPositionTicks;
+            }
+
+            var seekAge = DateTime.UtcNow - session.LastRemoteSeekDate.Value;
+            if (seekAge.TotalSeconds > 15)
+            {
+                session.LastRemoteSeekPositionTicks = null;
+                session.LastRemoteSeekDate = null;
+                return reportedPositionTicks;
+            }
+
+            const long SeekSettledToleranceTicks = TimeSpan.TicksPerSecond * 2;
+            var seekPositionTicks = session.LastRemoteSeekPositionTicks.Value;
+            if (Math.Abs(reportedPositionTicks.Value - seekPositionTicks) <= SeekSettledToleranceTicks)
+            {
+                session.LastRemoteSeekPositionTicks = null;
+                session.LastRemoteSeekDate = null;
+                return reportedPositionTicks;
+            }
+
+            var estimatedPositionTicks = !isPaused
+                ? seekPositionTicks + Math.Max((DateTime.UtcNow - session.LastRemoteSeekDate.Value).Ticks, 0)
+                : seekPositionTicks;
+
+            return SanitizePositionTicks(session, estimatedPositionTicks);
         }
 
         /// <summary>
@@ -1471,7 +1504,7 @@ namespace Emby.Server.Implementations.Session
         }
 
         /// <inheritdoc />
-        public Task SendPlaystateCommand(string controllingSessionId, string sessionId, PlaystateRequest command, CancellationToken cancellationToken)
+        public async Task<SessionInfoDto> SendPlaystateCommand(string controllingSessionId, string sessionId, PlaystateRequest command, CancellationToken cancellationToken)
         {
             CheckDisposed();
 
@@ -1487,7 +1520,79 @@ namespace Emby.Server.Implementations.Session
                 }
             }
 
-            return SendMessageToSession(session, SessionMessageType.Playstate, command, cancellationToken);
+            NormalizePlaystateCommand(session, command);
+
+            await SendMessageToSession(session, SessionMessageType.Playstate, command, cancellationToken)
+                .ConfigureAwait(false);
+
+            return ToSessionInfoDto(session);
+        }
+
+        private static void NormalizePlaystateCommand(SessionInfo session, PlaystateRequest command)
+        {
+            if (command.Command == PlaystateCommand.Pause)
+            {
+                UpdateSessionPauseState(session, true);
+            }
+            else if (command.Command == PlaystateCommand.Unpause)
+            {
+                UpdateSessionPauseState(session, false);
+            }
+            else if (command.Command == PlaystateCommand.PlayPause)
+            {
+                UpdateSessionPauseState(session, !session.PlayState.IsPaused);
+            }
+
+            if (command.Command == PlaystateCommand.SeekRelative)
+            {
+                command.Command = PlaystateCommand.Seek;
+                command.SeekPositionTicks = GetCurrentPositionTicks(session) + (command.SeekOffsetTicks ?? 0);
+            }
+
+            if (command.Command == PlaystateCommand.Seek && command.SeekPositionTicks.HasValue)
+            {
+                UpdateSessionPosition(session, command.SeekPositionTicks.Value);
+            }
+        }
+
+        private static long GetCurrentPositionTicks(SessionInfo session)
+        {
+            var positionTicks = session.PlayState?.PositionTicks ?? 0;
+            return SanitizePositionTicks(session, positionTicks);
+        }
+
+        private static void UpdateSessionPosition(SessionInfo session, long positionTicks)
+        {
+            var sanitizedPositionTicks = SanitizePositionTicks(session, positionTicks);
+            var now = DateTime.UtcNow;
+
+            session.PlayState.PositionTicks = sanitizedPositionTicks;
+            session.LastActivityDate = now;
+            session.LastPlaybackCheckIn = now;
+            session.LastRemoteSeekPositionTicks = sanitizedPositionTicks;
+            session.LastRemoteSeekDate = now;
+        }
+
+        private static void UpdateSessionPauseState(SessionInfo session, bool isPaused)
+        {
+            var now = DateTime.UtcNow;
+
+            session.PlayState.IsPaused = isPaused;
+            session.LastActivityDate = now;
+            session.LastPlaybackCheckIn = now;
+            session.LastPausedDate = isPaused ? now : null;
+        }
+
+        private static long SanitizePositionTicks(SessionInfo session, long positionTicks)
+        {
+            var sanitizedPositionTicks = Math.Max(positionTicks, 0);
+            var runtimeTicks = session.NowPlayingItem?.RunTimeTicks;
+            if (runtimeTicks.HasValue)
+            {
+                sanitizedPositionTicks = Math.Min(sanitizedPositionTicks, runtimeTicks.Value);
+            }
+
+            return sanitizedPositionTicks;
         }
 
         private static void AssertCanControl(SessionInfo session, SessionInfo controllingSession)

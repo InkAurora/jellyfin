@@ -36,6 +36,11 @@ namespace MediaBrowser.Model.Session
         Seek,
 
         /// <summary>
+        /// The seek relative to the current server-reported position.
+        /// </summary>
+        SeekRelative,
+
+        /// <summary>
         /// The rewind.
         /// </summary>
         Rewind,

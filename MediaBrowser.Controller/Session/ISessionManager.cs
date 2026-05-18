@@ -182,8 +182,8 @@ namespace MediaBrowser.Controller.Session
         /// <param name="sessionId">The session id.</param>
         /// <param name="command">The command.</param>
         /// <param name="cancellationToken">The cancellation token.</param>
-        /// <returns>Task.</returns>
-        Task SendPlaystateCommand(string controllingSessionId, string sessionId, PlaystateRequest command, CancellationToken cancellationToken);
+        /// <returns>Updated session info.</returns>
+        Task<SessionInfoDto> SendPlaystateCommand(string controllingSessionId, string sessionId, PlaystateRequest command, CancellationToken cancellationToken);
 
         /// <summary>
         /// Sends the message to admin sessions.

@@ -132,6 +132,20 @@ namespace MediaBrowser.Controller.Session
         public DateTime? LastPausedDate { get; set; }
 
         /// <summary>
+        /// Gets or sets the last remote seek command position.
+        /// </summary>
+        /// <value>The last remote seek command position.</value>
+        [JsonIgnore]
+        public long? LastRemoteSeekPositionTicks { get; set; }
+
+        /// <summary>
+        /// Gets or sets the last remote seek command date.
+        /// </summary>
+        /// <value>The last remote seek command date.</value>
+        [JsonIgnore]
+        public DateTime? LastRemoteSeekDate { get; set; }
+
+        /// <summary>
         /// Gets or sets the name of the device.
         /// </summary>
         /// <value>The name of the device.</value>

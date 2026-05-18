@@ -8,6 +8,8 @@ namespace MediaBrowser.Model.Session
 
         public long? SeekPositionTicks { get; set; }
 
+        public long? SeekOffsetTicks { get; set; }
+
         /// <summary>
         /// Gets or sets the controlling user identifier.
         /// </summary>
