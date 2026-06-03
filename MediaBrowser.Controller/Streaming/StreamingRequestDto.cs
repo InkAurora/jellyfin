@@ -38,6 +38,11 @@ public class StreamingRequestDto : BaseEncodingJobOptions
     public int? MinSegments { get; set; }
 
     /// <summary>
+    /// Gets or sets the HLS adaptive bitrate variant id.
+    /// </summary>
+    public string? VariantId { get; set; }
+
+    /// <summary>
     /// Gets or sets the position of the requested segment in ticks.
     /// </summary>
     public long CurrentRuntimeTicks { get; set; }

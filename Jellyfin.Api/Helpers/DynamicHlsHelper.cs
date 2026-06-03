@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Security.Claims;
@@ -11,6 +12,7 @@ using Jellyfin.Api.Extensions;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
+using Jellyfin.MediaEncoding.Hls.Playlist;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Common.Extensions;
 using MediaBrowser.Common.Net;
@@ -45,6 +47,7 @@ public class DynamicHlsHelper
     private readonly IHttpContextAccessor _httpContextAccessor;
     private readonly EncodingHelper _encodingHelper;
     private readonly ITrickplayManager _trickplayManager;
+    private readonly IDynamicHlsPlaylistGenerator _dynamicHlsPlaylistGenerator;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DynamicHlsHelper"/> class.
@@ -60,6 +63,7 @@ public class DynamicHlsHelper
     /// <param name="httpContextAccessor">Instance of the <see cref="IHttpContextAccessor"/> interface.</param>
     /// <param name="encodingHelper">Instance of <see cref="EncodingHelper"/>.</param>
     /// <param name="trickplayManager">Instance of <see cref="ITrickplayManager"/>.</param>
+    /// <param name="dynamicHlsPlaylistGenerator">Instance of <see cref="IDynamicHlsPlaylistGenerator"/>.</param>
     public DynamicHlsHelper(
         ILibraryManager libraryManager,
         IUserManager userManager,
@@ -71,7 +75,8 @@ public class DynamicHlsHelper
         ILogger<DynamicHlsHelper> logger,
         IHttpContextAccessor httpContextAccessor,
         EncodingHelper encodingHelper,
-        ITrickplayManager trickplayManager)
+        ITrickplayManager trickplayManager,
+        IDynamicHlsPlaylistGenerator dynamicHlsPlaylistGenerator)
     {
         _libraryManager = libraryManager;
         _userManager = userManager;
@@ -84,6 +89,7 @@ public class DynamicHlsHelper
         _httpContextAccessor = httpContextAccessor;
         _encodingHelper = encodingHelper;
         _trickplayManager = trickplayManager;
+        _dynamicHlsPlaylistGenerator = dynamicHlsPlaylistGenerator;
     }
 
     /// <summary>
@@ -146,6 +152,7 @@ public class DynamicHlsHelper
         var builder = new StringBuilder();
 
         builder.AppendLine("#EXTM3U");
+        builder.AppendLine("#EXT-X-VERSION:3");
 
         var isLiveStream = state.IsSegmentedLiveStream;
 
@@ -209,6 +216,8 @@ public class DynamicHlsHelper
             AddSubtitles(state, subtitleStreams, builder, _httpContextAccessor.HttpContext.User);
         }
 
+        var abrEnabled = EnableAdaptiveBitrateStreaming(state, isLiveStream, enableAdaptiveBitrateStreaming, _httpContextAccessor.HttpContext.GetNormalizedRemoteIP());
+
         // For DoVi profiles without a compatible base layer (P5 HEVC, P10/bl0 AV1),
         // add a spec-compliant dvh1/dav1 variant before the hvc1 hack variant.
         // SUPPLEMENTAL-CODECS cannot be used for these profiles (no compatible BL to supplement).
@@ -216,7 +225,8 @@ public class DynamicHlsHelper
         // select it over the fallback when both have identical BANDWIDTH.
         // Only emit for clients that explicitly declared DOVI support to avoid breaking
         // non-compliant players that don't recognize dvh1/dav1 CODECS strings.
-        if (state.VideoStream is not null
+        if (!abrEnabled
+            && state.VideoStream is not null
             && state.VideoRequest is not null
             && EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
             && state.VideoStream.VideoRangeType == VideoRangeType.DOVI
@@ -228,9 +238,13 @@ public class DynamicHlsHelper
             AppendDoviPlaylist(builder, state, playlistUrl, totalBitrate, subtitleGroup);
         }
 
-        var basicPlaylist = AppendPlaylist(builder, state, playlistUrl, totalBitrate, subtitleGroup);
+        StringBuilder? basicPlaylist = null;
+        if (!abrEnabled)
+        {
+            basicPlaylist = AppendPlaylist(builder, state, playlistUrl, totalBitrate, subtitleGroup);
+        }
 
-        if (state.VideoStream is not null && state.VideoRequest is not null)
+        if (!abrEnabled && state.VideoStream is not null && state.VideoRequest is not null)
         {
             var encodingOptions = _serverConfigurationManager.GetEncodingOptions();
 
@@ -307,29 +321,87 @@ public class DynamicHlsHelper
 
                 // Restore the video level.
                 state.VideoStream.Level = originalLevel;
-                var newPlaylist = ReplacePlaylistCodecsField(basicPlaylist, playlistCodecsField, newPlaylistCodecsField);
+                var newPlaylist = ReplacePlaylistCodecsField(basicPlaylist!, playlistCodecsField, newPlaylistCodecsField);
                 builder.Append(newPlaylist);
             }
         }
 
-        if (EnableAdaptiveBitrateStreaming(state, isLiveStream, enableAdaptiveBitrateStreaming, _httpContextAccessor.HttpContext.GetNormalizedRemoteIP()))
+        if (abrEnabled)
         {
-            var requestedVideoBitrate = state.VideoRequest?.VideoBitRate ?? 0;
+            var requestedVideoBitrate = Math.Max(state.OutputVideoBitrate ?? 0, state.VideoRequest?.VideoBitRate ?? 0);
+            var maxAbrTotalBitrate = Math.Max(totalBitrate, requestedVideoBitrate + (state.OutputAudioBitrate ?? 0));
+            var abrVariants = CreateAdaptiveBitrateVariants(
+                maxAbrTotalBitrate,
+                state.OutputAudioBitrate ?? 0,
+                requestedVideoBitrate,
+                state.VideoStream?.BitRate,
+                state.VideoStream?.Width,
+                state.VideoStream?.Height,
+                state.OutputWidth,
+                state.OutputHeight);
 
-            // By default, vary by just 200k
-            var variation = GetBitrateVariation(totalBitrate);
+            if (abrVariants.Count > 0)
+            {
+                var originalVideoBitrate = state.OutputVideoBitrate;
+                var originalAudioBitrate = state.OutputAudioBitrate;
+                var originalRequestedVideoBitrate = state.VideoRequest?.VideoBitRate;
+                var originalRequestedAudioBitrate = state.VideoRequest?.AudioBitRate;
+                var originalMaxWidth = state.VideoRequest?.MaxWidth;
+                var originalMaxHeight = state.VideoRequest?.MaxHeight;
+                var originalWidth = state.VideoRequest?.Width;
+                var originalHeight = state.VideoRequest?.Height;
+                var playlistId = Path.GetFileNameWithoutExtension(state.OutputFilePath);
+                var masterVariants = new List<MasterPlaylistVariant>(abrVariants.Count);
 
-            var newBitrate = totalBitrate - variation;
-            var variantQuery = playlistQuery;
-            variantQuery["VideoBitrate"] = (requestedVideoBitrate - variation).ToString(CultureInfo.InvariantCulture);
-            var variantUrl = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(baseUrl, variantQuery);
-            AppendPlaylist(builder, state, variantUrl, newBitrate, subtitleGroup);
+                foreach (var variant in abrVariants)
+                {
+                    var variantId = GetVariantId(variant.TotalBitrate);
+                    var variantQuery = Microsoft.AspNetCore.WebUtilities.QueryHelpers.ParseQuery(queryString);
+                    variantQuery["VideoBitrate"] = variant.VideoBitrate.ToString(CultureInfo.InvariantCulture);
+                    variantQuery["AudioBitrate"] = variant.AudioBitrate.ToString(CultureInfo.InvariantCulture);
+                    variantQuery["MaxStreamingBitrate"] = variant.TotalBitrate.ToString(CultureInfo.InvariantCulture);
+                    variantQuery["MaxWidth"] = variant.Width.ToString(CultureInfo.InvariantCulture);
+                    variantQuery["MaxHeight"] = variant.Height.ToString(CultureInfo.InvariantCulture);
+                    variantQuery["AllowVideoStreamCopy"] = "false";
+                    variantQuery["EnableAdaptiveBitrateStreaming"] = "true";
 
-            variation *= 2;
-            newBitrate = totalBitrate - variation;
-            variantQuery["VideoBitrate"] = (requestedVideoBitrate - variation).ToString(CultureInfo.InvariantCulture);
-            variantUrl = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(baseUrl, variantQuery);
-            AppendPlaylist(builder, state, variantUrl, newBitrate, subtitleGroup);
+                    state.OutputVideoBitrate = variant.VideoBitrate;
+                    state.OutputAudioBitrate = variant.AudioBitrate;
+                    if (state.VideoRequest is not null)
+                    {
+                        state.VideoRequest.VideoBitRate = variant.VideoBitrate;
+                        state.VideoRequest.AudioBitRate = variant.AudioBitrate;
+                        state.VideoRequest.Width = null;
+                        state.VideoRequest.Height = null;
+                        state.VideoRequest.MaxWidth = variant.Width;
+                        state.VideoRequest.MaxHeight = variant.Height;
+                    }
+
+                    var variantUrl = Microsoft.AspNetCore.WebUtilities.QueryHelpers.AddQueryString(
+                        $"hls/{playlistId}/{variantId}/stream.m3u8",
+                        variantQuery);
+                    masterVariants.Add(new MasterPlaylistVariant(BuildStreamInfo(state, variant.TotalBitrate, subtitleGroup), variantUrl));
+                }
+
+                builder.Append(_dynamicHlsPlaylistGenerator.CreateMasterPlaylist(masterVariants)
+                    .Replace("#EXTM3U" + Environment.NewLine + "#EXT-X-VERSION:3" + Environment.NewLine, string.Empty, StringComparison.Ordinal));
+
+                state.OutputVideoBitrate = originalVideoBitrate;
+                state.OutputAudioBitrate = originalAudioBitrate;
+                if (state.VideoRequest is not null)
+                {
+                    state.VideoRequest.Width = originalWidth;
+                    state.VideoRequest.Height = originalHeight;
+                    state.VideoRequest.VideoBitRate = originalRequestedVideoBitrate;
+                    state.VideoRequest.AudioBitRate = originalRequestedAudioBitrate;
+                    state.VideoRequest.MaxWidth = originalMaxWidth;
+                    state.VideoRequest.MaxHeight = originalMaxHeight;
+                }
+            }
+            else
+            {
+                AppendPlaylist(builder, state, playlistUrl, totalBitrate, subtitleGroup);
+            }
         }
 
         if (!isLiveStream && (state.VideoRequest?.EnableTrickplay ?? false))
@@ -345,19 +417,28 @@ public class DynamicHlsHelper
     private StringBuilder AppendPlaylist(StringBuilder builder, StreamState state, string url, int bitrate, string? subtitleGroup)
     {
         var playlistBuilder = new StringBuilder();
-        playlistBuilder.Append("#EXT-X-STREAM-INF:BANDWIDTH=")
+        playlistBuilder.Append("#EXT-X-STREAM-INF:")
+            .Append(BuildStreamInfo(state, bitrate, subtitleGroup));
+
+        playlistBuilder.Append(Environment.NewLine);
+        playlistBuilder.AppendLine(url);
+        builder.Append(playlistBuilder);
+
+        return playlistBuilder;
+    }
+
+    private string BuildStreamInfo(StreamState state, int bitrate, string? subtitleGroup)
+    {
+        var playlistBuilder = new StringBuilder();
+        playlistBuilder.Append("BANDWIDTH=")
             .Append(bitrate.ToString(CultureInfo.InvariantCulture))
             .Append(",AVERAGE-BANDWIDTH=")
             .Append(bitrate.ToString(CultureInfo.InvariantCulture));
 
         AppendPlaylistVideoRangeField(playlistBuilder, state);
-
         AppendPlaylistCodecsField(playlistBuilder, state);
-
         AppendPlaylistSupplementalCodecsField(playlistBuilder, state);
-
         AppendPlaylistResolutionField(playlistBuilder, state);
-
         AppendPlaylistFramerateField(playlistBuilder, state);
 
         if (!string.IsNullOrWhiteSpace(subtitleGroup))
@@ -367,11 +448,7 @@ public class DynamicHlsHelper
                 .Append('"');
         }
 
-        playlistBuilder.Append(Environment.NewLine);
-        playlistBuilder.AppendLine(url);
-        builder.Append(playlistBuilder);
-
-        return playlistBuilder;
+        return playlistBuilder.ToString();
     }
 
     /// <summary>
@@ -636,11 +713,8 @@ public class DynamicHlsHelper
 
     private bool EnableAdaptiveBitrateStreaming(StreamState state, bool isLiveStream, bool enableAdaptiveBitrateStreaming, IPAddress ipAddress)
     {
-        // Within the local network this will likely do more harm than good.
-        if (_networkManager.IsInLocalNetwork(ipAddress))
-        {
-            return false;
-        }
+        _ = _networkManager;
+        _ = ipAddress;
 
         if (!enableAdaptiveBitrateStreaming)
         {
@@ -654,11 +728,6 @@ public class DynamicHlsHelper
         }
 
         if (EncodingHelper.IsCopyCodec(state.OutputVideoCodec))
-        {
-            return false;
-        }
-
-        if (EncodingHelper.IsCopyCodec(state.OutputAudioCodec))
         {
             return false;
         }
@@ -957,42 +1026,95 @@ public class DynamicHlsHelper
         return string.Empty;
     }
 
-    private int GetBitrateVariation(int bitrate)
+    internal static IReadOnlyList<AbrVariant> CreateAdaptiveBitrateVariants(
+        int maxTotalBitrate,
+        int audioBitrate,
+        int requestedVideoBitrate,
+        int? sourceVideoBitrate,
+        int? sourceWidth,
+        int? sourceHeight,
+        int? requestedWidth,
+        int? requestedHeight)
     {
-        // By default, vary by just 50k
-        var variation = 50000;
-
-        if (bitrate >= 10000000)
+        if (maxTotalBitrate <= audioBitrate || requestedVideoBitrate <= 0)
         {
-            variation = 2000000;
-        }
-        else if (bitrate >= 5000000)
-        {
-            variation = 1500000;
-        }
-        else if (bitrate >= 3000000)
-        {
-            variation = 1000000;
-        }
-        else if (bitrate >= 2000000)
-        {
-            variation = 500000;
-        }
-        else if (bitrate >= 1000000)
-        {
-            variation = 300000;
-        }
-        else if (bitrate >= 600000)
-        {
-            variation = 200000;
-        }
-        else if (bitrate >= 400000)
-        {
-            variation = 100000;
+            return Array.Empty<AbrVariant>();
         }
 
-        return variation;
+        var maxVideoBitrate = Math.Min(requestedVideoBitrate, maxTotalBitrate - audioBitrate);
+
+        var sourceW = sourceWidth ?? requestedWidth ?? 0;
+        var sourceH = sourceHeight ?? requestedHeight ?? 0;
+        if (sourceW <= 0 || sourceH <= 0 || maxVideoBitrate <= 0)
+        {
+            return Array.Empty<AbrVariant>();
+        }
+
+        var variants = new List<AbrVariant>(10);
+        AddVariant(maxVideoBitrate + audioBitrate, audioBitrate, requestedWidth ?? sourceW, requestedHeight ?? sourceH);
+
+        foreach (var candidate in new[]
+        {
+            (Height: 2160, TotalBitrate: 120000000),
+            (Height: 2160, TotalBitrate: 80000000),
+            (Height: 2160, TotalBitrate: 60000000),
+            (Height: 2160, TotalBitrate: 40000000),
+            (Height: 2160, TotalBitrate: 20000000),
+            (Height: 1440, TotalBitrate: 15000000),
+            (Height: 1440, TotalBitrate: 10000000),
+            (Height: 1080, TotalBitrate: 8000000),
+            (Height: 1080, TotalBitrate: 6000000),
+            (Height: 720, TotalBitrate: 4000000),
+            (Height: 720, TotalBitrate: 3000000),
+            (Height: 480, TotalBitrate: 1500000),
+            (Height: 360, TotalBitrate: 720000),
+            (Height: 360, TotalBitrate: 420000)
+        })
+        {
+            if (candidate.TotalBitrate > maxTotalBitrate)
+            {
+                continue;
+            }
+
+            var height = Math.Min(candidate.Height, sourceH);
+            var width = NormalizeEven((int)Math.Round(sourceW * (height / (double)sourceH)));
+            AddVariant(candidate.TotalBitrate, GetAudioBitrateForTotalBitrate(candidate.TotalBitrate), Math.Min(width, sourceW), height);
+        }
+
+        return variants
+            .GroupBy(i => i.TotalBitrate)
+            .Select(i => i.First())
+            .OrderByDescending(i => i.TotalBitrate)
+            .ToArray();
+
+        int GetAudioBitrateForTotalBitrate(int totalBitrate)
+            => Math.Min(audioBitrate, totalBitrate switch
+            {
+                <= 420000 => 96000,
+                <= 720000 => 128000,
+                <= 1500000 => 192000,
+                _ => audioBitrate
+            });
+
+        void AddVariant(int totalBitrate, int variantAudioBitrate, int width, int height)
+        {
+            width = Math.Min(NormalizeEven(width), sourceW);
+            height = Math.Min(NormalizeEven(height), sourceH);
+            var videoBitrate = totalBitrate - variantAudioBitrate;
+            if (videoBitrate <= 0 || width <= 0 || height <= 0 || totalBitrate > maxTotalBitrate || videoBitrate > maxVideoBitrate)
+            {
+                return;
+            }
+
+            variants.Add(new AbrVariant(GetVariantId(totalBitrate), videoBitrate, variantAudioBitrate, totalBitrate, width, height));
+        }
     }
+
+    internal static string GetVariantId(int totalBitrate)
+        => "v" + totalBitrate.ToString(CultureInfo.InvariantCulture);
+
+    private static int NormalizeEven(int value)
+        => value % 2 == 0 ? value : value - 1;
 
     private string ReplacePlaylistCodecsField(StringBuilder playlist, StringBuilder oldValue, StringBuilder newValue)
     {
@@ -1002,4 +1124,6 @@ public class DynamicHlsHelper
             newValue.ToString(),
             StringComparison.Ordinal);
     }
+
+    internal sealed record AbrVariant(string Id, int VideoBitrate, int AudioBitrate, int TotalBitrate, int Width, int Height);
 }

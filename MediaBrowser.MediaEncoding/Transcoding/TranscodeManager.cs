@@ -138,6 +138,11 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                 job.IsUserPaused = isUserPaused.Value;
             }
 
+            if (!string.IsNullOrWhiteSpace(job.VariantId))
+            {
+                continue;
+            }
+
             PingTimer(job, true);
         }
     }
@@ -213,6 +218,18 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                 yield return KillTranscodingJob(job, false, deleteFiles);
             }
         }
+    }
+
+    /// <inheritdoc />
+    public Task KillTranscodingJob(string path, TranscodingJobType type, Func<string, bool> deleteFiles)
+    {
+        TranscodingJob? job;
+        lock (_activeTranscodingJobs)
+        {
+            job = _activeTranscodingJobs.FirstOrDefault(j => j.Type == type && string.Equals(j.Path, path, StringComparison.OrdinalIgnoreCase));
+        }
+
+        return job is null ? Task.CompletedTask : KillTranscodingJob(job, false, deleteFiles);
     }
 
     private async Task KillTranscodingJob(TranscodingJob job, bool closeLiveStream, Func<string, bool> delete)
@@ -597,6 +614,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                 Id = transcodingJobId,
                 PlaySessionId = playSessionId,
                 LiveStreamId = liveStreamId,
+                VariantId = state.Request.VariantId,
+                VariantBitrate = state.VideoRequest?.VideoBitRate,
                 MediaSource = state.MediaSource
             };
 
@@ -697,7 +716,9 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
             }
 
             job.ActiveRequestCount++;
-            if (string.IsNullOrWhiteSpace(job.PlaySessionId) || job.Type == TranscodingJobType.Progressive)
+            if (!string.IsNullOrWhiteSpace(job.VariantId)
+                || string.IsNullOrWhiteSpace(job.PlaySessionId)
+                || job.Type == TranscodingJobType.Progressive)
             {
                 job.StopKillTimer();
             }

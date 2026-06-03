@@ -69,6 +69,11 @@ public class PlaybackInfoDto
     public bool? EnableTranscoding { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether to enable adaptive bitrate HLS.
+    /// </summary>
+    public bool? EnableAdaptiveBitrate { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether to enable video stream copy.
     /// </summary>
     public bool? AllowVideoStreamCopy { get; set; }

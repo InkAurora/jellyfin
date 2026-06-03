@@ -37,6 +37,16 @@ public sealed class TranscodingJob : IDisposable
     public string? LiveStreamId { get; set; }
 
     /// <summary>
+    /// Gets or sets the HLS adaptive bitrate variant id.
+    /// </summary>
+    public string? VariantId { get; set; }
+
+    /// <summary>
+    /// Gets or sets the HLS adaptive bitrate variant bitrate.
+    /// </summary>
+    public int? VariantBitrate { get; set; }
+
+    /// <summary>
     /// Gets or sets a value indicating whether is live output.
     /// </summary>
     public bool IsLiveOutput { get; set; }

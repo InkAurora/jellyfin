@@ -106,6 +106,23 @@ public class DynamicHlsPlaylistGenerator : IDynamicHlsPlaylistGenerator
         return builder.ToString();
     }
 
+    /// <inheritdoc />
+    public string CreateMasterPlaylist(IReadOnlyList<MasterPlaylistVariant> variants)
+    {
+        var builder = new StringBuilder(128);
+        builder.AppendLine("#EXTM3U")
+            .AppendLine("#EXT-X-VERSION:3");
+
+        foreach (var variant in variants)
+        {
+            builder.Append("#EXT-X-STREAM-INF:")
+                .AppendLine(variant.StreamInfo)
+                .AppendLine(variant.Url);
+        }
+
+        return builder.ToString();
+    }
+
     private bool TryExtractKeyframes(Guid itemId, string filePath, [NotNullWhen(true)] out KeyframeData? keyframeData)
     {
         keyframeData = null;

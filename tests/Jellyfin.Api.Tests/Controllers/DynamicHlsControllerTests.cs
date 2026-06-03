@@ -1,5 +1,6 @@
 using System;
 using Jellyfin.Api.Controllers;
+using Jellyfin.Api.Helpers;
 using Xunit;
 
 namespace Jellyfin.Api.Tests.Controllers
@@ -16,6 +17,29 @@ namespace Jellyfin.Api.Tests.Controllers
             {
                 Assert.Equal(expected[i], res[i]);
             }
+        }
+
+        [Fact]
+        public void CreateAdaptiveBitrateVariants_ObeysMaxBitrateAndNoUpscale()
+        {
+            var variants = DynamicHlsHelper.CreateAdaptiveBitrateVariants(
+                4200000,
+                128000,
+                8000000,
+                10000000,
+                1280,
+                720,
+                1280,
+                720);
+
+            Assert.All(variants, variant =>
+            {
+                Assert.True(variant.TotalBitrate <= 4200000);
+                Assert.True(variant.Width <= 1280);
+                Assert.True(variant.Height <= 720);
+            });
+            Assert.Contains(variants, variant => variant.VideoBitrate == 4000000 && variant.Height == 720);
+            Assert.DoesNotContain(variants, variant => variant.Height > 720);
         }
 
         public static TheoryData<long, int, double[]> GetSegmentLengths_Success_TestData()

@@ -163,6 +163,7 @@ public class MediaInfoHelper
     /// <param name="enableDirectPlay">Enable direct play.</param>
     /// <param name="enableDirectStream">Enable direct stream.</param>
     /// <param name="enableTranscoding">Enable transcoding.</param>
+    /// <param name="enableAdaptiveBitrate">Enable adaptive bitrate HLS.</param>
     /// <param name="allowVideoStreamCopy">Allow video stream copy.</param>
     /// <param name="allowAudioStreamCopy">Allow audio stream copy.</param>
     /// <param name="alwaysBurnInSubtitleWhenTranscoding">Always burn-in subtitle when transcoding.</param>
@@ -183,6 +184,7 @@ public class MediaInfoHelper
         bool enableDirectPlay,
         bool enableDirectStream,
         bool enableTranscoding,
+        bool enableAdaptiveBitrate,
         bool allowVideoStreamCopy,
         bool allowAudioStreamCopy,
         bool alwaysBurnInSubtitleWhenTranscoding,
@@ -298,6 +300,7 @@ public class MediaInfoHelper
                 mediaSource.SupportsDirectStream = false;
 
                 mediaSource.TranscodingUrl = streamInfo.ToUrl(null, claimsPrincipal.GetToken(), "&allowVideoStreamCopy=false&allowAudioStreamCopy=false");
+                AppendAdaptiveBitrateQuery(mediaSource, streamInfo, enableAdaptiveBitrate);
                 mediaSource.TranscodingContainer = streamInfo.Container;
                 mediaSource.TranscodingSubProtocol = streamInfo.SubProtocol;
                 if (streamInfo.AlwaysBurnInSubtitleWhenTranscoding)
@@ -311,6 +314,7 @@ public class MediaInfoHelper
                 {
                     streamInfo.PlayMethod = PlayMethod.Transcode;
                     mediaSource.TranscodingUrl = streamInfo.ToUrl(null, claimsPrincipal.GetToken(), null);
+                    AppendAdaptiveBitrateQuery(mediaSource, streamInfo, enableAdaptiveBitrate);
 
                     if (!allowVideoStreamCopy)
                     {
@@ -437,6 +441,7 @@ public class MediaInfoHelper
                 request.EnableDirectPlay,
                 request.EnableDirectStream,
                 true,
+                false,
                 true,
                 true,
                 request.AlwaysBurnInSubtitleWhenTranscoding,
@@ -465,6 +470,20 @@ public class MediaInfoHelper
     public void NormalizeMediaSourceContainer(MediaSourceInfo mediaSource, DeviceProfile profile, DlnaProfileType type)
     {
         mediaSource.Container = StreamBuilder.NormalizeMediaSourceFormatIntoSingleContainer(mediaSource.Container, profile, type);
+    }
+
+    private static void AppendAdaptiveBitrateQuery(MediaSourceInfo mediaSource, StreamInfo streamInfo, bool enableAdaptiveBitrate)
+    {
+        if (!enableAdaptiveBitrate
+            || streamInfo.MediaType != DlnaProfileType.Video
+            || streamInfo.SubProtocol != MediaStreamProtocol.hls
+            || !string.IsNullOrWhiteSpace(mediaSource.LiveStreamId)
+            || string.IsNullOrWhiteSpace(mediaSource.TranscodingUrl))
+        {
+            return;
+        }
+
+        mediaSource.TranscodingUrl += "&EnableAdaptiveBitrate=true&EnableAdaptiveBitrateStreaming=true";
     }
 
     private void SetDeviceSpecificSubtitleInfo(StreamInfo info, MediaSourceInfo mediaSource, string accessToken)

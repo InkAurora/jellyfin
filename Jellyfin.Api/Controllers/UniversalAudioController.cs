@@ -157,6 +157,7 @@ public class UniversalAudioController : BaseJellyfinApiController
                 true,
                 true,
                 true,
+                false,
                 true,
                 true,
                 false,

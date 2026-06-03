@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Jellyfin.MediaEncoding.Hls.Playlist;
 using Jellyfin.MediaEncoding.Keyframes;
 using Xunit;
@@ -58,6 +59,21 @@ namespace Jellyfin.MediaEncoding.Hls.Tests.Playlist
         public void IsExtractionAllowedForFile_Invalid_ReturnsFalse(string filePath, string[] allowedExtensions)
         {
             Assert.False(DynamicHlsPlaylistGenerator.IsExtractionAllowedForFile(filePath, allowedExtensions));
+        }
+
+        [Fact]
+        public void CreateMasterPlaylist_WithVariants_ContainsStreamInfEntries()
+        {
+            var generator = new DynamicHlsPlaylistGenerator(null!, Array.Empty<Jellyfin.MediaEncoding.Hls.Extractors.IKeyframeExtractor>());
+            var playlist = generator.CreateMasterPlaylist(new List<MasterPlaylistVariant>
+            {
+                new("BANDWIDTH=8000000,RESOLUTION=1920x1080,CODECS=\"avc1.640028,mp4a.40.2\"", "hls/playlist/v8000000/stream.m3u8"),
+                new("BANDWIDTH=4000000,RESOLUTION=1280x720,CODECS=\"avc1.640028,mp4a.40.2\"", "hls/playlist/v4000000/stream.m3u8")
+            });
+
+            Assert.Contains("#EXT-X-VERSION:3", playlist);
+            Assert.Contains("#EXT-X-STREAM-INF:BANDWIDTH=8000000,RESOLUTION=1920x1080", playlist);
+            Assert.Contains("hls/playlist/v4000000/stream.m3u8", playlist);
         }
 
         public static TheoryData<int, long, double[]> ComputeEqualLengthSegments_Valid_Success_Data()

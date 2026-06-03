@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 namespace Jellyfin.MediaEncoding.Hls.Playlist;
 
 /// <summary>
@@ -11,4 +13,11 @@ public interface IDynamicHlsPlaylistGenerator
     /// <param name="request">An instance of the <see cref="CreateMainPlaylistRequest"/> class.</param>
     /// <returns>The playlist as a formatted string.</returns>
     string CreateMainPlaylist(CreateMainPlaylistRequest request);
+
+    /// <summary>
+    /// Creates a master playlist containing adaptive bitrate variants.
+    /// </summary>
+    /// <param name="variants">The adaptive bitrate variants.</param>
+    /// <returns>The playlist as a formatted string.</returns>
+    string CreateMasterPlaylist(IReadOnlyList<MasterPlaylistVariant> variants);
 }

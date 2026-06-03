@@ -107,6 +107,7 @@ public class MediaInfoController : BaseJellyfinApiController
     /// <param name="enableDirectPlay">Whether to enable direct play. Default: true.</param>
     /// <param name="enableDirectStream">Whether to enable direct stream. Default: true.</param>
     /// <param name="enableTranscoding">Whether to enable transcoding. Default: true.</param>
+    /// <param name="enableAdaptiveBitrate">Whether to enable adaptive bitrate HLS. Default: false.</param>
     /// <param name="allowVideoStreamCopy">Whether to allow to copy the video stream. Default: true.</param>
     /// <param name="allowAudioStreamCopy">Whether to allow to copy the audio stream. Default: true.</param>
     /// <param name="playbackInfoDto">The playback info.</param>
@@ -130,6 +131,7 @@ public class MediaInfoController : BaseJellyfinApiController
         [FromQuery, ParameterObsolete] bool? enableDirectPlay,
         [FromQuery, ParameterObsolete] bool? enableDirectStream,
         [FromQuery, ParameterObsolete] bool? enableTranscoding,
+        [FromQuery, ParameterObsolete] bool? enableAdaptiveBitrate,
         [FromQuery, ParameterObsolete] bool? allowVideoStreamCopy,
         [FromQuery, ParameterObsolete] bool? allowAudioStreamCopy,
         [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] PlaybackInfoDto? playbackInfoDto)
@@ -161,6 +163,7 @@ public class MediaInfoController : BaseJellyfinApiController
         enableDirectPlay ??= playbackInfoDto?.EnableDirectPlay ?? true;
         enableDirectStream ??= playbackInfoDto?.EnableDirectStream ?? true;
         enableTranscoding ??= playbackInfoDto?.EnableTranscoding ?? true;
+        enableAdaptiveBitrate ??= playbackInfoDto?.EnableAdaptiveBitrate ?? false;
         allowVideoStreamCopy ??= playbackInfoDto?.AllowVideoStreamCopy ?? true;
         allowAudioStreamCopy ??= playbackInfoDto?.AllowAudioStreamCopy ?? true;
 
@@ -207,6 +210,7 @@ public class MediaInfoController : BaseJellyfinApiController
                     enableDirectPlay.Value,
                     enableDirectStream.Value,
                     enableTranscoding.Value,
+                    enableAdaptiveBitrate.Value,
                     allowVideoStreamCopy.Value,
                     allowAudioStreamCopy.Value,
                     playbackInfoDto?.AlwaysBurnInSubtitleWhenTranscoding ?? false,
