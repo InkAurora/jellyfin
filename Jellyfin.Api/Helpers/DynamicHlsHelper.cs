@@ -1056,9 +1056,10 @@ public class DynamicHlsHelper
         foreach (var candidate in new[]
         {
             (Height: 2160, TotalBitrate: 120000000),
-            (Height: 2160, TotalBitrate: 80000000),
-            (Height: 2160, TotalBitrate: 60000000),
             (Height: 2160, TotalBitrate: 40000000),
+            (Height: 2160, TotalBitrate: 35000000),
+            (Height: 2160, TotalBitrate: 30000000),
+            (Height: 2160, TotalBitrate: 25000000),
             (Height: 2160, TotalBitrate: 20000000),
             (Height: 1440, TotalBitrate: 15000000),
             (Height: 1440, TotalBitrate: 10000000),
