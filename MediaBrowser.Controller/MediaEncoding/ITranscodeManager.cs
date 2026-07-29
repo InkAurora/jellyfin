@@ -43,6 +43,22 @@ public interface ITranscodeManager
     public Task KillTranscodingJobs(string deviceId, string? playSessionId, Func<string, bool> deleteFiles);
 
     /// <summary>
+    /// Kills all transcoding jobs for a playback session except one output path.
+    /// </summary>
+    /// <param name="deviceId">The device id.</param>
+    /// <param name="playSessionId">The play session identifier.</param>
+    /// <param name="excludedPath">The output path to retain.</param>
+    /// <param name="type">The type of transcoding jobs to kill.</param>
+    /// <param name="deleteFiles">The delete files predicate.</param>
+    /// <returns>Task.</returns>
+    public Task KillTranscodingJobsExcept(
+        string deviceId,
+        string? playSessionId,
+        string excludedPath,
+        TranscodingJobType type,
+        Func<string, bool> deleteFiles);
+
+    /// <summary>
     /// Kills the transcoding job for a specific output path.
     /// </summary>
     /// <param name="path">Path to the transcoding file.</param>

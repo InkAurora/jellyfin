@@ -1589,8 +1589,27 @@ public class DynamicHlsController : BaseJellyfinApiController
                 // If the playlist doesn't already exist, startup ffmpeg
                 try
                 {
-                    await _transcodeManager.KillTranscodingJob(playlistPath, TranscodingJobType, p => false)
-                        .ConfigureAwait(false);
+                    if (!string.IsNullOrWhiteSpace(state.Request.VariantId)
+                        && !string.IsNullOrWhiteSpace(state.Request.PlaySessionId))
+                    {
+                        // ABR variants have separate playlists, so stopping only this playlist leaves the
+                        // previous bitrate's ffmpeg process reading the source in parallel.
+                        await _transcodeManager.KillTranscodingJobsExcept(
+                                state.Request.DeviceId ?? string.Empty,
+                                state.Request.PlaySessionId,
+                                playlistPath,
+                                TranscodingJobType,
+                                p => true)
+                            .ConfigureAwait(false);
+
+                        await _transcodeManager.KillTranscodingJob(playlistPath, TranscodingJobType, p => false)
+                            .ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await _transcodeManager.KillTranscodingJob(playlistPath, TranscodingJobType, p => false)
+                            .ConfigureAwait(false);
+                    }
 
                     if (currentTranscodingIndex.HasValue)
                     {

@@ -221,6 +221,32 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
     }
 
     /// <inheritdoc />
+    public Task KillTranscodingJobsExcept(string deviceId, string? playSessionId, string excludedPath, TranscodingJobType type, Func<string, bool> deleteFiles)
+    {
+        var jobs = new List<TranscodingJob>();
+
+        lock (_activeTranscodingJobs)
+        {
+            jobs.AddRange(_activeTranscodingJobs.Where(j =>
+                (string.IsNullOrWhiteSpace(playSessionId)
+                    ? string.Equals(deviceId, j.DeviceId, StringComparison.OrdinalIgnoreCase)
+                    : string.Equals(playSessionId, j.PlaySessionId, StringComparison.OrdinalIgnoreCase))
+                && j.Type == type
+                && !string.Equals(excludedPath, j.Path, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        return Task.WhenAll(GetKillJobs());
+
+        IEnumerable<Task> GetKillJobs()
+        {
+            foreach (var job in jobs)
+            {
+                yield return KillTranscodingJob(job, false, deleteFiles);
+            }
+        }
+    }
+
+    /// <inheritdoc />
     public Task KillTranscodingJob(string path, TranscodingJobType type, Func<string, bool> deleteFiles)
     {
         TranscodingJob? job;
@@ -254,12 +280,41 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
 
         if (delete(job.Path!))
         {
-            await DeletePartialStreamFiles(job.Path!, job.Type, 0, 1500).ConfigureAwait(false);
+            _ = DeletePartialStreamFilesWhenUnused(job);
         }
 
         if (closeLiveStream && !string.IsNullOrWhiteSpace(job.LiveStreamId))
         {
             await _sessionManager.CloseLiveStreamIfNeededAsync(job.LiveStreamId, job.PlaySessionId).ConfigureAwait(false);
+        }
+    }
+
+    private async Task DeletePartialStreamFilesWhenUnused(TranscodingJob job)
+    {
+        try
+        {
+            var cleanupDeadline = DateTime.UtcNow.AddSeconds(30);
+            while (job.ActiveRequestCount > 0 && DateTime.UtcNow < cleanupDeadline)
+            {
+                await Task.Delay(100).ConfigureAwait(false);
+            }
+
+            if (job.ActiveRequestCount > 0)
+            {
+                _logger.LogWarning(
+                    "Timed out waiting for {ActiveRequestCount} active request(s) before deleting partial stream file(s) {Path}",
+                    job.ActiveRequestCount,
+                    job.Path);
+            }
+
+            if (job.Path is not null)
+            {
+                await DeletePartialStreamFiles(job.Path, job.Type, 0, 1500).ConfigureAwait(false);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting unused partial stream file(s) {Path}", job.Path);
         }
     }
 

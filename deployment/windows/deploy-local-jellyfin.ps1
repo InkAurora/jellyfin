@@ -185,7 +185,8 @@ function Stop-JellyfinProcesses {
     param([Parameter(Mandatory)][string]$InstallPath)
 
     $target = [IO.Path]::GetFullPath($InstallPath).TrimEnd('\')
-    $processes = @(Get-Process -Name jellyfin -ErrorAction SilentlyContinue | Where-Object {
+    $jellyfinProcesses = @(Get-Process -Name jellyfin -ErrorAction SilentlyContinue)
+    $processes = @($jellyfinProcesses | Where-Object {
         try {
             $_.Path -and [IO.Path]::GetFullPath($_.Path).StartsWith($target, [StringComparison]::OrdinalIgnoreCase)
         } catch {
@@ -193,10 +194,48 @@ function Stop-JellyfinProcesses {
         }
     })
 
+    if ($processes.Count -eq 0 -and $jellyfinProcesses.Count -eq 1) {
+        # Get-Process.Path is unavailable for some local launches. A single
+        # jellyfin.exe process is unambiguous for a no-service deployment.
+        $processes = $jellyfinProcesses
+    } elseif ($processes.Count -eq 0 -and $jellyfinProcesses.Count -gt 1) {
+        throw "Could not identify Jellyfin process under $InstallPath. Stop it manually or use a service deployment."
+    }
+
+    $stoppedProcessCount = 0
     foreach ($process in $processes) {
         Write-Host "Stopping process $($process.Id) ($($process.Path))"
         Stop-Process -Id $process.Id -Force
+        $stoppedProcessCount++
     }
+
+    return $stoppedProcessCount
+}
+
+function Start-JellyfinProcess {
+    param(
+        [Parameter(Mandatory)][string]$InstallPath,
+        [Parameter(Mandatory)][int]$TimeoutSeconds
+    )
+
+    $executablePath = Join-Path $InstallPath 'jellyfin.exe'
+    $dataPath = Join-Path (Split-Path $InstallPath -Parent) 'data'
+    $arguments = if (Test-Path $dataPath -PathType Container) { @('-d', $dataPath) } else { @() }
+
+    Write-Host "Starting backend: $executablePath $($arguments -join ' ')"
+    $process = Start-Process -FilePath $executablePath -ArgumentList $arguments -WorkingDirectory $InstallPath -WindowStyle Hidden -PassThru
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    do {
+        $process.Refresh()
+        if (-not $process.HasExited) {
+            return
+        }
+
+        Start-Sleep -Seconds 1
+    } while ((Get-Date) -lt $deadline)
+
+    throw "Jellyfin process exited before it could restart."
 }
 
 function Invoke-Robocopy {
@@ -224,6 +263,10 @@ function Invoke-Robocopy {
     if ($exitCode -ge 8) {
         throw "robocopy failed with exit code $exitCode."
     }
+
+    # Robocopy uses non-zero codes for successful copy outcomes. Do not leak one
+    # as this deployment script's process exit code.
+    $global:LASTEXITCODE = 0
 }
 
 function Publish-Jellyfin {
@@ -320,6 +363,7 @@ if (-not (Test-Path (Join-Path $publishRoot 'jellyfin.dll'))) {
 }
 
 $wasRunning = $false
+$stoppedProcessCount = 0
 
 if (-not $NoServiceRestart -and $service) {
     $currentService = Get-Service -Name $service.Name
@@ -330,7 +374,7 @@ if (-not $NoServiceRestart -and $service) {
         Wait-ServiceState -Name $service.Name -Status 'Stopped' -TimeoutSeconds $StopTimeoutSeconds
     }
 } elseif (-not $NoServiceRestart) {
-    Stop-JellyfinProcesses -InstallPath $installRoot
+    $stoppedProcessCount = Stop-JellyfinProcesses -InstallPath $installRoot
 }
 
 if (-not $NoBackup) {
@@ -345,6 +389,8 @@ if (-not $NoServiceRestart -and $service -and $wasRunning) {
     Write-Host "Starting service $($service.Name)"
     Start-Service -Name $service.Name
     Wait-ServiceState -Name $service.Name -Status 'Running' -TimeoutSeconds $StartTimeoutSeconds
+} elseif (-not $NoServiceRestart -and $stoppedProcessCount -gt 0) {
+    Start-JellyfinProcess -InstallPath $installRoot -TimeoutSeconds $StartTimeoutSeconds
 }
 
 Write-Host "Deploy complete."
